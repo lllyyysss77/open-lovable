@@ -5,7 +5,8 @@ export {
   FiFile, 
   FiChevronRight, 
   FiChevronDown,
-  FiGithub 
+  FiGithub,
+  FiSettings
 } from 'react-icons/fi';
 
 export { 
@@ -19,3 +20,5 @@ export {
   SiCss3, 
   SiJson 
 } from 'react-icons/si';
+// Re-export Settings as an alias for FiSettings for convenience
+export { FiSettings as Settings } from 'react-icons/fi';
