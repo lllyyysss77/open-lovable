@@ -17,7 +17,7 @@ import {
   BsFolderFill, 
   BsFolder2Open,
   Trash2,
-  Settings
+  Settings,
   SiReact, 
   SiCss3, 
   SiJson 
@@ -108,6 +108,7 @@ export default function AISandboxPage() {
     appliedCode: [],
     currentProject: '',
     lastGeneratedCode: undefined
+  });
   const [showApiConfig, setShowApiConfig] = useState(false);
   const [apiConfig, setApiConfig] = useState<ApiConfig>(() => {
     // 从 localStorage 加载配置
@@ -126,7 +127,6 @@ export default function AISandboxPage() {
       apiKey: '',
       model: 'gpt-3.5-turbo'
     };
-  });
   });
   
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -221,13 +221,6 @@ export default function AISandboxPage() {
   useEffect(() => {
     // Handle Escape key for home screen
     const handleKeyDown = (e: KeyboardEvent) => {
-
-  // 保存 API 配置到 localStorage
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('apiConfig', JSON.stringify(apiConfig));
-    }
-  }, [apiConfig]);
       if (e.key === 'Escape' && showHomeScreen) {
         setHomeScreenFading(true);
         setTimeout(() => {
@@ -240,6 +233,13 @@ export default function AISandboxPage() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [showHomeScreen]);
+
+  // 保存 API 配置到 localStorage
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('apiConfig', JSON.stringify(apiConfig));
+    }
+  }, [apiConfig]);
   
   // Start capturing screenshot if URL is provided on mount (from home screen)
   useEffect(() => {
@@ -1588,7 +1588,12 @@ Tip: I automatically detect and install npm packages from your code imports (lik
           prompt: message,
           model: aiModel,
           context: fullContext,
-          isEdit: conversationContext.appliedCode.length > 0
+          isEdit: conversationContext.appliedCode.length > 0,
+          apiConfig: {
+            model: apiConfig.model,
+            apiUrl: apiConfig.apiUrl,
+            apiKey: apiConfig.apiKey
+          }
         })
       });
       
@@ -2006,7 +2011,7 @@ Tip: I automatically detect and install npm packages from your code imports (lik
     const ext = fileName.split('.').pop()?.toLowerCase();
     
     if (ext === 'jsx' || ext === 'js') {
-      return <SiJavascript className="w-4 h-4 text-yellow-500" />;
+      return <SiReact className="w-4 h-4 text-yellow-500" />;
     } else if (ext === 'tsx' || ext === 'ts') {
       return <SiReact className="w-4 h-4 text-blue-500" />;
     } else if (ext === 'css') {
@@ -2388,6 +2393,12 @@ Focus on the key sections and content, making it clean and modern while preservi
     e.preventDefault();
     if (!homeUrlInput.trim()) return;
     
+    // 检查是否已配置 API
+    if (!apiConfig.apiKey) {
+      setShowApiConfig(true);
+      return;
+    }
+    
     setHomeScreenFading(true);
     
     // Clear messages and immediately show the cloning message
@@ -2425,12 +2436,6 @@ Focus on the key sections and content, making it clean and modern while preservi
       setUrlInput(homeUrlInput);
       setUrlOverlayVisible(false); // Make sure overlay is closed
       setUrlStatus(['Scraping website content...']);
-      
-      // 检查是否已配置 API
-      if (!apiConfig.apiKey) {
-        setShowApiConfig(true);
-        return;
-      }
       
       try {
         // Scrape the website
@@ -2779,7 +2784,12 @@ Focus on the key sections and content, making it clean and modern.`;
     }, 500);
   };
 
-  }, [apiConfig.apiKey]);
+  const handleApiConfigSave = (config: ApiConfig) => {
+    setApiConfig(config);
+    addChatMessage('✅ API 配置已保存', 'system');
+  };
+
+  return (
     <div className="font-sans bg-background text-foreground h-screen flex flex-col">
       {/* Theme Toggle */}
       <ThemeToggle />
@@ -3021,11 +3031,6 @@ Focus on the key sections and content, making it clean and modern.`;
                     const params = new URLSearchParams(searchParams);
                     params.set('model', newModel);
                     if (sandboxData?.sandboxId) {
-    
-    if (!apiConfig.apiKey) {
-      setShowApiConfig(true);
-      return;
-    }
                       params.set('sandbox', sandboxData.sandboxId);
                     }
                     router.push(`/?${params.toString()}`);
@@ -3043,9 +3048,7 @@ Focus on the key sections and content, making it clean and modern.`;
                 </select>
               </div>
             </div>
-          model: apiConfig.model,
-          apiUrl: apiConfig.apiUrl,
-          apiKey: apiConfig.apiKey
+          </div>
         </div>
       )}
       
@@ -3325,11 +3328,6 @@ Focus on the key sections and content, making it clean and modern.`;
                     <div className="bg-gray-900 border border-gray-700 rounded max-h-32 overflow-y-auto scrollbar-hide">
                       <SyntaxHighlighter
                         language="jsx"
-
-  const handleApiConfigSave = (config: ApiConfig) => {
-    setApiConfig(config);
-    addMessage('system', '✅ API 配置已保存');
-  };
                         style={vscDarkPlus}
                         customStyle={{
                           margin: 0,
@@ -3370,14 +3368,6 @@ Focus on the key sections and content, making it clean and modern.`;
                   }
                 }}
                 rows={3}
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={() => setShowApiConfig(true)}
-                title="API 配置"
-              >
-                <Settings className="w-4 h-4" />
-              </Button>
               />
               <button
                 onClick={sendChatMessage}
@@ -3389,15 +3379,32 @@ Focus on the key sections and content, making it clean and modern.`;
                 </svg>
               </button>
             </div>
-          </div>
-          
-          {/* API 状态指示器 */}
-          <div className="mt-2 flex items-center gap-2 text-sm text-muted-foreground">
-            <div className={`w-2 h-2 rounded-full ${apiConfig.apiKey ? 'bg-green-500' : 'bg-red-500'}`} />
-            {apiConfig.apiKey ? (
-              <span>API 已配置 ({apiConfig.model})</span>
-            ) : (
-              <span>请配置 API</span>
+            
+            <div className="mt-2 flex items-center justify-between">
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => setShowApiConfig(true)}
+                title="API 配置"
+              >
+                <Settings className="w-4 h-4" />
+              </Button>
+              
+              {/* API 状态指示器 */}
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <div className={`w-2 h-2 rounded-full ${apiConfig.apiKey ? 'bg-green-500' : 'bg-red-500'}`} />
+                {apiConfig.apiKey ? (
+                  <span>API 已配置 ({apiConfig.model})</span>
+                ) : (
+                  <span>请配置 API</span>
+                )}
+              </div>
+            </div>
+            
+            {!apiConfig.apiKey && (
+              <p className="text-sm text-orange-600 dark:text-orange-400 mt-2">
+                ⚠️ 请先配置 API 密钥
+              </p>
             )}
           </div>
         </div>
@@ -3428,11 +3435,6 @@ Focus on the key sections and content, making it clean and modern.`;
                       : 'text-gray-300 hover:text-white hover:bg-gray-700'
                   }`}
                   title="Preview"
-              {!apiConfig.apiKey && (
-                <p className="text-sm text-orange-600 dark:text-orange-400 mt-2">
-                  ⚠️ 请先配置 API 密钥
-                </p>
-              )}
                 >
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
@@ -3492,13 +3494,6 @@ Focus on the key sections and content, making it clean and modern.`;
           </div>
         </div>
       </div>
-
-
-
-
-    </div>
-  );
-}
       
       {/* API 配置模态框 */}
       <ApiConfigModal
@@ -3507,3 +3502,6 @@ Focus on the key sections and content, making it clean and modern.`;
         onSave={handleApiConfigSave}
         currentConfig={apiConfig}
       />
+    </div>
+  );
+}
