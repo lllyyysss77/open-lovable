@@ -1,28 +1,31 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createGroq } from '@ai-sdk/groq';
-import { createAnthropic } from '@ai-sdk/anthropic';
-import { createOpenAI } from '@ai-sdk/openai';
-import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { streamText } from 'ai';
-import type { SandboxState } from '@/types/sandbox';
 import { selectFilesForEdit, getFileContents, formatFilesForAI } from '@/lib/context-selector';
-import { executeSearchPlan, formatSearchResultsForAI, selectTargetFile } from '@/lib/file-search-executor';
-import { FileManifest } from '@/types/file-manifest';
-import type { ConversationState, ConversationMessage, ConversationEdit } from '@/types/conversation';
-import { appConfig } from '@/config/app.config';
-
-const groq = createGroq({
-  apiKey: process.env.GROQ_API_KEY,
-});
-
-const anthropic = createAnthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-  baseURL: process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com/v1',
-});
-
-const googleGenerativeAI = createGoogleGenerativeAI({
-  apiKey: process.env.GEMINI_API_KEY,
-});
+// 创建自定义 OpenAI 兼容客户端
+function createCustomOpenAI(apiUrl: string, apiKey: string) {
+  return {
+    chat: {
+      completions: {
+        create: async (params: any) => {
+          const response = await fetch(`${apiUrl}/chat/completions`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${apiKey}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(params)
+          });
+          
+          if (!response.ok) {
+            throw new Error(`API request failed: ${response.status}`);
+          }
+          
+          return response;
+        }
+      }
+    }
+  };
+}
 
 const openai = createOpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -74,7 +77,13 @@ declare global {
 
 export async function POST(request: NextRequest) {
   try {
-    const { prompt, model = 'openai/gpt-oss-20b', context, isEdit = false } = await request.json();
+    const { 
+      prompt, 
+      model = 'gpt-3.5-turbo', 
+      temperature = 0.7,
+      apiUrl = 'https://api.openai.com/v1',
+      apiKey
+    } = await request.json();
     
     console.log('[generate-ai-code-stream] Received request:');
     console.log('[generate-ai-code-stream] - prompt:', prompt);
@@ -137,6 +146,12 @@ export async function POST(request: NextRequest) {
       }, { status: 400 });
     }
     
+    if (!apiKey) {
+      return NextResponse.json({
+        error: 'API key is required'
+      }, { status: 400 });
+    }
+    
     // Create a stream for real-time updates
     const encoder = new TextEncoder();
     const stream = new TransformStream();
@@ -151,8 +166,142 @@ export async function POST(request: NextRequest) {
     // Start processing in background
     (async () => {
       try {
-        // Send initial status
-        await sendProgress({ type: 'status', message: 'Initializing AI...' });
+        // 使用自定义 fetch 实现流式响应
+        const response = await fetch(`${apiUrl}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            model: model,
+            messages: [
+              {
+                role: 'system',
+                content: `You are an expert React developer. Create modern, responsive React applications using Vite, Tailwind CSS, and the latest React patterns.
+
+CRITICAL INSTRUCTIONS:
+1. You MUST specify packages using <package> tags BEFORE using them in your code
+2. For example: <package>three</package> or <package>@heroicons/react</package>
+3. Always use Tailwind CSS for styling - never create separate CSS files
+4. Create complete, working components with proper imports
+5. Use modern React patterns (hooks, functional components)
+6. Make the design responsive and visually appealing
+7. Include proper TypeScript types when applicable
+
+Format your response with:
+<explanation>Brief explanation of what you're building</explanation>
+<package>package-name</package> (for each package needed)
+<file path="src/components/ComponentName.jsx">
+// Complete component code here
+</file>`
+              },
+              {
+                role: 'user',
+                content: prompt
+              }
+            ],
+            temperature: temperature,
+            stream: true
+          })
+        });
+
+        if (!response.ok) {
+          throw new Error(`API request failed: ${response.status}`);
+        }
+
+        const reader = response.body?.getReader();
+        if (!reader) {
+          throw new Error('No response body');
+        }
+
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              const data = line.slice(6);
+              if (data === '[DONE]') continue;
+              
+              try {
+                const parsed = JSON.parse(data);
+                const content = parsed.choices?.[0]?.delta?.content;
+                if (content) {
+                  // 检测包标签
+                  const searchText = tagBuffer + content;
+                  const packageRegex = /<package>([^<]+)<\/package>/g;
+                  let packageMatch;
+                  
+                  while ((packageMatch = packageRegex.exec(searchText)) !== null) {
+                    const packageName = packageMatch[1].trim();
+                    if (packageName && !packagesToInstall.includes(packageName)) {
+                      packagesToInstall.push(packageName);
+                      await sendProgress({ 
+                        type: 'package', 
+                        name: packageName,
+                        message: `📦 Package detected: ${packageName}`
+                      });
+                    }
+                  }
+                  
+                  // 更新缓冲区
+                  if (searchText.includes('<package>') && !searchText.includes('</package>')) {
+                    tagBuffer = searchText.substring(searchText.lastIndexOf('<package>'));
+                  } else {
+                    tagBuffer = '';
+                  }
+                  
+                  await sendProgress({ 
+                    type: 'text', 
+                    content: content 
+                  });
+                }
+              } catch (e) {
+                // 忽略解析错误
+              }
+            }
+          }
+        }
+
+        await sendProgress({ 
+          type: 'complete',
+          packages: packagesToInstall
+        });
+        
+      } catch (error) {
+        console.error('[generate-ai-code-stream] Streaming error:', error);
+        await sendProgress({ 
+          type: 'error', 
+          error: (error as Error).message 
+        });
+      } finally {
+        await writer.close();
+      }
+    })();
+    
+    return new Response(stream.readable, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+      },
+    });
+    
+  } catch (error) {
+    console.error('[generate-ai-code-stream] Error:', error);
+    return NextResponse.json({
+      error: (error as Error).message
+    }, { status: 500 });
+  }
+}
         
         // No keep-alive needed - sandbox provisioned for 10 minutes
         
